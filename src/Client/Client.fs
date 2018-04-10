@@ -3,6 +3,7 @@ module Client
 open Elmish
 open Elmish.React
 
+open Fable.Core.JsInterop
 open Fable.Helpers.React
 open Fable.Helpers.React.Props
 open Fable.PowerPack.Fetch
@@ -19,14 +20,23 @@ open Fulma.BulmaClasses
 open Fulma.BulmaClasses.Bulma
 open Fulma.BulmaClasses.Bulma.Properties
 open Fulma.Extra.FontAwesome
+open Fable.PowerPack
 
-type Model = Counter option
+type Model = {
+  Comment : string
+  Name    : string
+  Score   : Score option
+  Loading : bool
+  Results : VotingResults option
+}
 
 type Msg =
-| Increment
-| Decrement
-| Init of Result<Counter, exn>
-
+| SetComment of string
+| SetName    of string
+| SetScore   of Score
+| Submit
+| SeeScores
+| GotResults of Result<VotingResults, exn>
 
 module Server = 
 
@@ -34,54 +44,57 @@ module Server =
   open Fable.Remoting.Client
   
   /// A proxy you can use to talk to server directly
-  let api : ICounterProtocol = 
-    Proxy.remoting<ICounterProtocol> {
+  let api : IVotingProtocol = 
+    Proxy.remoting<IVotingProtocol> {
       use_route_builder Route.builder
     }
     
 
 let init () : Model * Cmd<Msg> =
-  let model = None
-  let cmd =
-    Cmd.ofAsync 
-      Server.api.getInitCounter
-      () 
-      (Ok >> Init)
-      (Error >> Init)
+  let model = 
+    { Comment = ""
+      Name    = ""
+      Score   = None
+      Loading = false
+      Results = None }
+  let cmd = Cmd.none
   model, cmd
+
+let makeVote (model : Model) : Vote =
+  {
+    Comment = model.Comment
+    Name = model.Name
+    Score = defaultArg model.Score Good
+  }
 
 let update (msg : Msg) (model : Model) : Model * Cmd<Msg> =
   let model' =
-    match model,  msg with
-    | Some x, Increment -> Some (x + 1)
-    | Some x, Decrement -> Some (x - 1)
-    | None, Init (Ok x) -> Some x
-    | _ -> None
-  model', Cmd.none
+    match msg with
+    | SetComment comment -> { model with Comment = comment }
+    | SetName name       -> { model with Name    = name }
+    | SetScore score     -> { model with Score   = Some score }
+    | Submit             -> { model with Loading = true }
+    | SeeScores             -> { model with Loading = true }
+    | GotResults (Ok r)  -> { model with Loading = false
+                                         Results = Some r }
+    | GotResults _       -> { model with Loading = false }
 
-let safeComponents =
-  let intersperse sep ls =
-    List.foldBack (fun x -> function
-      | [] -> [x]
-      | xs -> x::sep::xs) ls []
-
-  let components =
-    [
-      "Suave", "http://suave.io"
-      "Fable", "http://fable.io"
-      "Elmish", "https://fable-elmish.github.io/"
-      "Fulma", "https://mangelmaxime.github.io/Fulma" 
-      "Bulma\u00A0Templates", "https://dansup.github.io/bulma-templates/"
-      "Fable.Remoting", "https://zaid-ajaj.github.io/Fable.Remoting/"
-    ]
-    |> List.map (fun (desc,link) -> a [ Href link ] [ str desc ] )
-    |> intersperse (str ", ")
-    |> span [ ]
-
-  p [ ]
-    [ strong [] [ str "SAFE Template" ]
-      str " powered by: "
-      components ]
+  let cmd = 
+    match msg with
+    | Submit ->
+      Cmd.ofAsync
+        Server.api.addVote
+        (makeVote model')
+        (Ok >> GotResults)
+        (Error >> GotResults)
+    | SeeScores ->
+      Cmd.ofAsync
+        Server.api.getResults
+        ()
+        (Ok >> GotResults)
+        (Error >> GotResults)
+    | _ -> Cmd.none      
+  model', cmd
 
 let show = function
 | Some x -> string x
@@ -102,11 +115,11 @@ let navBrand =
 let navMenu =
   Navbar.menu [ ]
     [ Navbar.End.div [ ] 
-        [ Navbar.Item.a [ ] 
+        [ Navbar.Item.a [ Navbar.Item.Props[ Href "/" ] ]
             [ str "Home" ] 
-          Navbar.Item.a [ ]
+          Navbar.Item.a [ Navbar.Item.Props[ Href "https://safe-stack.github.io/" ] ]
             [ str "Examples" ]
-          Navbar.Item.a [ ]
+          Navbar.Item.a [ Navbar.Item.Props[ Href "http://fable.io/samples-browser/" ] ]
             [ str "Documentation" ]
           Navbar.Item.div [ ]
             [ Button.a 
@@ -118,23 +131,116 @@ let navMenu =
                     [ Fa.icon Fa.I.Github; Fa.fw ]
                   span [ ] [ str "View Source" ] ] ] ] ]
 
-let containerBox (model : Model) (dispatch : Msg -> unit) =
+let field input = 
+  Field.div [ ]
+    [ Field.body [ ]
+        [ input ] ]
+
+let onChange action = 
+  OnChange (fun e -> action !!e.target?value)
+
+let scoreIcon = function
+| Good -> Fa.I.SmileO
+| SoSo -> Fa.I.MehO
+| Poor -> Fa.I.FrownO
+
+let scoreColor model (score:Score) = 
+  match model.Score with
+  | None -> IsWhite
+  | Some s when s <> score -> IsWhite
+  | _ ->
+    match score with
+    | Good -> IsSuccess
+    | SoSo -> IsWarning
+    | Poor -> IsDanger
+
+let scores (model : Model) (dispatch : Msg -> unit) =
+  let item score = 
+    Level.item []
+      [ Button.a 
+          [ Button.Color (scoreColor model score) 
+            Button.Disabled model.Loading
+            Button.OnClick (fun _ -> dispatch (SetScore score))]
+          [ Icon.faIcon []
+             [Fa.icon (scoreIcon score)
+              Fa.fa2x]]]
+  Level.level [Level.Level.IsMobile]
+    [ item Good
+      item SoSo
+      item Poor ] 
+
+let comment (model : Model) (dispatch : Msg -> unit) =
+  Textarea.textarea 
+    [ Textarea.Placeholder "Comment"
+      Textarea.DefaultValue model.Comment
+      Textarea.Disabled model.Loading
+      Textarea.Props [onChange (SetComment >> dispatch)]]
+    []
+
+let name (model : Model) (dispatch : Msg -> unit) =
+  Input.text 
+    [ Input.Placeholder "Name"
+      Input.DefaultValue model.Name
+      Input.Disabled model.Loading
+      Input.Props [onChange (SetName >> dispatch)]]
+
+let submit (model : Model) (dispatch : Msg -> unit) =
+  Button.a 
+    [ Button.Color IsPrimary 
+      Button.IsFullwidth
+      Button.OnClick (fun _ -> dispatch Submit)
+      Button.IsLoading model.Loading ]
+    [ str "Submit" ]
+
+let see (model : Model) (dispatch : Msg -> unit) =
+  Button.a 
+    [ Button.Color IsLight 
+      Button.IsFullwidth
+      Button.OnClick (fun _ -> dispatch SeeScores)
+      Button.IsLoading model.Loading ]
+    [ str "See scores" ]
+
+let formBox (model : Model) (dispatch : Msg -> unit) =
   Box.box' [ ]
-    [ Form.Field.div [ Form.Field.IsGrouped ] 
-        [ Form.Control.p [ Form.Control.CustomClass "is-expanded"] 
-            [ Form.Input.text
-                [ Form.Input.Disabled true
-                  Form.Input.Value (show model) ] ]
-          Form.Control.p [ ]
-            [ Button.a 
-                [ Button.Color IsPrimary
-                  Button.OnClick (fun _ -> dispatch Increment) ]
-                [ str "+" ] ]
-          Form.Control.p [ ]
-            [ Button.a 
-                [ Button.Color IsPrimary
-                  Button.OnClick (fun _ -> dispatch Decrement) ]
-                [ str "-" ] ] ] ]
+    [ field (scores  model dispatch)
+      field (comment model dispatch)
+      field (name    model dispatch)
+      field (submit  model dispatch)
+      field (see     model dispatch) ]
+
+let resultsBox (results : VotingResults) (dispatch : Msg -> unit) =
+  let item score = 
+    let count = defaultArg (Map.tryFind score results.Scores) 0
+    Level.item []
+      [ div 
+          [ ]
+          [ Icon.faIcon []
+             [Fa.icon (scoreIcon score)
+              Fa.fa2x]
+            h2 [ ] [ str (string count) ] ] ]
+  Box.box' [ ]
+    [ Level.level [Level.Level.IsMobile]
+        [ item Good
+          item SoSo
+          item Poor ]
+      Content.content [Content.Size IsSmall]
+        [ h3 [] [str "Comments"]
+          ol [Style [TextAlign "left"]] [
+            for (name, comment) in results.Comments ->
+              li [] [
+                i [] [str (sprintf "'%s'" comment) ]
+                str (sprintf "' - %s'" name)
+              ]
+          ] ]         
+ ]
+
+let containerBox (model : Model) (dispatch : Msg -> unit) =
+  match model.Results with
+  | None -> formBox model dispatch
+  | Some r -> resultsBox r dispatch
+
+let imgSrc = "https://aurum.no/images/favicons/ms-icon-144x144.png"
+
 
 let view (model : Model) (dispatch : Msg -> unit) =
   Hero.hero [ Hero.Color IsPrimary; Hero.IsFullHeight ] 
@@ -149,12 +255,17 @@ let view (model : Model) (dispatch : Msg -> unit) =
             [ Column.column 
                 [ Column.Width (Column.All, Column.Is6)
                   Column.Offset (Column.All, Column.Is3) ]
-                [ h1 [ ClassName "title" ] 
-                    [ str "SAFE Template" ]
+                [ Level.level [] 
+                    [Level.item []
+                      [Image.image [Image.Is128x128]
+                        [img 
+                          [Src imgSrc
+                           Style [Border "2px solid"]]]]]                
+                  h1 [ ClassName "title" ] 
+                    [ str "SAFE Kata" ]
                   div [ ClassName "subtitle" ]
-                    [ safeComponents ]
+                    [ str "Score my SAFE kata!" ]
                   containerBox model dispatch ] ] ] ]
-
   
 #if DEBUG
 open Elmish.Debug

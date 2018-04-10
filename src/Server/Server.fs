@@ -17,13 +17,47 @@ let config =
       homeFolder = Some clientPath
       bindings = [ HttpBinding.create HTTP (IPAddress.Parse "0.0.0.0") port ] }
 
+let votes = System.Collections.Concurrent.ConcurrentBag<Vote> ()
+
+let countVotes () : VotingResults =
+  let vs = 
+    votes
+    |> Seq.filter (fun v -> v.Name <> "" && v.Comment <> "")
+    |> Seq.toArray
+
+  let comments =
+    vs
+    |> Array.map (fun v -> v.Name, v.Comment) 
+
+  let scores = 
+    vs
+    |> Array.countBy (fun v -> v.Score)
+    |> Map.ofArray
+
+  { Comments = comments
+    Scores = scores }
+
+let addVote (vote: Vote) : Async<VotingResults> =
+  async {
+    do votes.Add vote
+    do! Async.Sleep 500
+    return countVotes()
+  }
+
+let getResults () : Async<VotingResults> =
+  async {
+    do! Async.Sleep 500
+    return countVotes()
+  }
+
 let getInitCounter () : Async<Counter> = async { return 42 }
 
 let init : WebPart = 
-  let counterProcotol = 
-    { getInitCounter = getInitCounter }
+  let votingProcotol = 
+    { getResults = getResults
+      addVote = addVote }
   // Create a WebPart for the given implementation of the protocol
-  remoting counterProcotol {
+  remoting votingProcotol {
     // define how routes are mapped
     use_route_builder Route.builder 
   }

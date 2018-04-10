@@ -90,8 +90,8 @@ Target "Bundle" (fun _ ->
   |> CopyFiles clientDir 
 )
 
-let dockerUser = "safe-template"
-let dockerImageName = "safe-template"
+let dockerUser = "aklefdal"
+let dockerImageName = "safe-kata"
 
 let dockerFullName = sprintf "%s/%s" dockerUser dockerImageName
 
@@ -103,12 +103,18 @@ Target "Docker" (fun _ ->
   run "docker" tagArgs "."
 )
 
+Target "Deploy" (fun _ ->
+  let pushArgs = sprintf "push %s" dockerFullName
+  run "docker" pushArgs "."
+)
+
 "Clean"
   ==> "InstallDotNetCore"
   ==> "InstallClient"
   ==> "Build"
   ==> "Bundle"
   ==> "Docker"
+  ==> "Deploy"
 
 "InstallClient"
   ==> "RestoreServer"

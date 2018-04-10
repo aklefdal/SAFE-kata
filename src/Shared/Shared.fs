@@ -2,6 +2,20 @@ namespace Shared
 
 type Counter = int
 
+type Score =
+| Good
+| SoSo
+| Poor
+
+type Vote = {
+  Comment : string
+  Name    : string
+  Score   : Score }
+
+type VotingResults =
+  { Comments : (string * string) [] 
+    Scores : Map<Score, int> }
+
 module Route =
   /// Defines how routes are generated on server and mapped from client
   let builder typeName methodName = 
@@ -12,3 +26,7 @@ module Route =
 /// Add more such fields, implement them on the server and they be directly available on client
 type ICounterProtocol =
   { getInitCounter : unit -> Async<Counter> }
+
+type IVotingProtocol =
+  { getResults : unit -> Async<VotingResults>
+    addVote : Vote -> Async<VotingResults> }
